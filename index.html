@@ -165,6 +165,15 @@ tfoot td{font-weight:700;border-top:2px solid var(--line);color:var(--brand)}
 .bkf input,.bkf select{min-height:44px}
 .bkf .mini{min-height:44px}
 .bkh{margin-top:6px}
+.pyform{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%;margin-top:10px}
+.pyform .pf_note,.pyform .mini,.pyform .pf_kind{grid-column:1/-1}
+.pyform input,.pyform select,.pyform .mini{min-height:44px}
+.pycalc{display:grid;grid-template-columns:1fr auto;gap:2px 12px;width:100%;margin-top:8px;font-size:14px}
+.pycalc span:nth-child(even){text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+.pycalc .tot{font:700 16px var(--display);padding-top:4px;border-top:1px solid var(--line)}
+.pyhist{width:100%;margin-top:8px;font-size:13px;color:var(--mute)}
+.pyhist div{display:flex;justify-content:space-between;gap:8px;padding:3px 0;border-bottom:1px dashed var(--line)}
+.pyhist .void{text-decoration:line-through;opacity:.6}
 .vform{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%;margin-top:8px}
 .vform .vf_note,.vform .mini{grid-column:1/-1}
 .vform input,.vform select,.vform .mini{min-height:44px}
@@ -229,7 +238,7 @@ function sum(a,f){return a.reduce(function(s,x){return s+(+f(x)||0)},0)}
 function uniq(a){var seen={},out=[];a.forEach(function(x){var k=String(x||'').trim();if(k&&!seen[k.toLowerCase()]){seen[k.toLowerCase()]=1;out.push(k)}});return out}
 var LS={get:function(k){try{return localStorage.getItem(k)}catch(e){return null}},set:function(k,v){try{localStorage.setItem(k,v)}catch(e){}},del:function(k){try{localStorage.removeItem(k)}catch(e){}}};
 
-var S={me:null,users:{},entries:[],payments:[],expenses:[],sales:[],lists:[],products:[],shops:[],sp:'products',sel:null,draft:null,settings:null,got:{u:false,e:false,s:false,l:false,p:false,h:false,m:false,x:false,v:false},db:null,ready:false,tab:null,view:null,autoTried:false,r:null,dl:null,f:{from:'',to:'',q:'',pay:'',by:''}};
+var S={me:null,users:{},entries:[],payments:[],expenses:[],sales:[],staff:[],pay:[],lists:[],products:[],shops:[],sp:'products',sel:null,draft:null,settings:null,got:{u:false,e:false,s:false,l:false,p:false,h:false,m:false,x:false,v:false},db:null,ready:false,tab:null,view:null,autoTried:false,r:null,dl:null,f:{from:'',to:'',q:'',pay:'',by:''}};
 var app=$('#app'),cur=null,toastT=null;
 
 function toast(msg,bad){var t=$('#toast');t.textContent=msg;t.className='show'+(bad?' bad':'');clearTimeout(toastT);toastT=setTimeout(function(){t.className=''},3200)}
@@ -252,17 +261,25 @@ function toEmail(id){return id+'@bazarkhata.app'}
 function toPass(pin){return pin+'-bk'}
 async function put(coll,id,data){await S.db.doc(coll+'/'+id).set(data)}
 async function patch(coll,id,data){await S.db.doc(coll+'/'+id).update(data)}
+async function multi(ops){
+  if(typeof S.db.batch==='function'){
+    var bt=S.db.batch();
+    ops.forEach(function(o){var r=S.db.doc(o.c+'/'+o.id);if(o.u)bt.update(r,o.d);else bt.set(r,o.d)});
+    await bt.commit();return;
+  }
+  for(var i=0;i<ops.length;i++){if(ops[i].u)await patch(ops[i].c,ops[i].id,ops[i].d);else await put(ops[i].c,ops[i].id,ops[i].d)}
+}
 function secondaryAuth(){if(!sec)sec=firebase.initializeApp(CFG,'secondary');return sec.auth()}
 function stopAll(){unsubs.forEach(function(u){try{u()}catch(e){}});unsubs=[]}
 
 function subscribe(){
   stopAll();
-  S.got={u:false,e:false,s:false,l:false,p:false,h:false,m:false,x:false,v:false};
+  S.got={u:false,e:false,s:false,l:false,p:false,h:false,m:false,x:false,v:false,t:false,y:false};
   var owner=S.me.role==='owner',cash=S.me.role==='cashier';
   var watch=function(q,fn,flag){
     unsubs.push(q.onSnapshot(function(s){fn(s);S.got[flag]=true;onData()},function(){S.got[flag]=true;toast('ডেটা লোড করা যায়নি',true);onData()}));
   };
-  var arr=function(key,flag,q){watch(q,function(s){S[key]=s.docs.map(function(d){return Object.assign({id:d.id},d.data())})},flag)};
+  var arr=function(key,flag,q){watch(q,function(s){S[key]=s.docs.map(function(d){return Object.assign({id:d.id},d.data())});if(key==='expenses')S[key]=S[key].filter(function(x){return !x.void})},flag)};
   watch(S.db.doc('settings/main'),function(s){S.settings=s.exists?s.data():null},'s');
   if(owner||cash){
     if(owner){
@@ -270,15 +287,17 @@ function subscribe(){
       arr('lists','l',S.db.collection('lists').orderBy('ts','desc').limit(300));
     }else{
       watch(S.db.doc('users/'+S.me.id),function(s){S.users={};if(s.exists)S.users[s.id]=s.data()},'u');
-      S.got.l=true;
+      arr('lists','l',S.db.collection('lists').orderBy('ts','desc').limit(300));
     }
     arr('entries','e',S.db.collection('entries').orderBy('date','desc').limit(1000));
     arr('payments','m',S.db.collection('payments').orderBy('ts','desc').limit(1000));
     arr('expenses','x',S.db.collection('expenses').orderBy('date','desc').limit(1000));
     arr('sales','v',S.db.collection('sales').orderBy('date','desc').limit(1000));
+    arr('staff','t',S.db.collection('staff').limit(300));
+    arr('pay','y',S.db.collection('pay').orderBy('ts','desc').limit(3000));
   }else{
     watch(S.db.doc('users/'+S.me.id),function(s){S.users={};if(s.exists)S.users[s.id]=s.data()},'u');
-    S.got.e=true;S.got.m=true;S.got.x=true;S.got.v=true;
+    S.got.e=true;S.got.m=true;S.got.x=true;S.got.v=true;S.got.t=true;S.got.y=true;
     arr('lists','l',S.db.collection('lists').where('by','==',S.me.id).limit(300));
   }
   arr('products','p',S.db.collection('products').limit(500));
@@ -288,7 +307,7 @@ function subscribe(){
 async function onAuth(user){
   if(S.creating)return;
   stopAll();
-  S.me=null;S.users={};S.entries=[];S.payments=[];S.expenses=[];S.sales=[];S.lists=[];S.products=[];S.shops=[];S.ready=false;
+  S.me=null;S.users={};S.entries=[];S.payments=[];S.expenses=[];S.sales=[];S.staff=[];S.pay=[];S.lists=[];S.products=[];S.shops=[];S.ready=false;
   if(!user){
     try{var st=await S.db.doc('settings/main').get();S.settings=st.exists?st.data():null;S.netErr=false}
     catch(e){S.netErr=true}
@@ -310,7 +329,7 @@ async function onAuth(user){
 }
 
 function onData(){
-  if(S.me&&S.got.u&&S.got.e&&S.got.s&&S.got.l&&S.got.p&&S.got.h&&S.got.m&&S.got.x&&S.got.v)S.ready=true;
+  if(S.me&&S.got.u&&S.got.e&&S.got.s&&S.got.l&&S.got.p&&S.got.h&&S.got.m&&S.got.x&&S.got.v&&S.got.t&&S.got.y)S.ready=true;
   if(S.me){
     var u=S.users[S.me.id];
     if(u){S.me.name=u.name;S.me.role=u.role;if(u.active===false){S.loginError='এই আইডি বন্ধ করা আছে।';logout();return}}
@@ -358,6 +377,7 @@ function route(){
   else if(k.indexOf('app')===0)updApp();
 }
 function rname(){return (S.settings&&S.settings.name)||'বাজার খাতা'}
+function isMn(){return !!S.me&&(S.me.role==='owner'||S.me.role==='cashier')}
 function roleLabel(){return S.me&&S.me.role==='owner'?'মালিক':S.me&&S.me.role==='cashier'?'ক্যাশিয়ার':'শেফ'}
 function topHTML(out){
   return '<header class="top"><div class="top-in wrap"><div class="tt"><span class="rn" id="rname">'+esc(rname())+'</span><span class="who" id="who">'+(S.me?esc(roleLabel()+' · '+S.me.name):'বাজারের হিসাব')+'</span></div>'+(out?'<button class="ghost" id="logout" type="button">বের হন</button>':'')+'</div></header>';
@@ -443,6 +463,7 @@ var IC={
   send:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 3 3 11l7 3 3 7zM10 14 21 3"/></svg>',
   mine:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>',
   report:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg>',
+  payroll:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.2 2.7-5.5 6-5.5s6 2.3 6 5.5M17 9v6M14.5 11h4a1.5 1.5 0 0 1 0 3h-3a1.5 1.5 0 0 0 0 3h4"/></svg>',
   trash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/></svg>'
 };
 var TABS={
@@ -456,12 +477,13 @@ var TABS={
   hisab:{t:'হিসাব',mount:mountHisab,update:updHisab},
   baki:{t:'বাকি',mount:mountBaki,update:updBaki},
   kharch:{t:'খরচ',mount:mountKharch,update:updKharch},
+  payroll:{t:'বেতন',mount:mountPayroll,update:updPayroll},
   bikri:{t:'বিক্রি',mount:mountBikri,update:updBikri},
   team:{t:'সেটআপ',mount:mountSetupTab,update:updSetup}
 };
 function mountApp(){
   var owner=S.me.role==='owner';
-  var keys=owner?['lists','entry','book','report','baki','kharch','bikri','hisab','team']:(S.me.role==='cashier'?['baki','kharch','bikri']:['send','prod','mine']);
+  var keys=owner?['lists','entry','book','report','baki','kharch','payroll','bikri','hisab','team']:(S.me.role==='cashier'?['lists','entry','book','report','baki','kharch','payroll','bikri','hisab','team']:['send','prod','mine']);
   if(keys.indexOf(S.tab)<0)S.tab=keys[0];
   app.innerHTML=topHTML(true)+(S.db?'':'<div class="banner"><div class="wrap"><p>এখানে ডেটা সেভ হচ্ছে না। পেজ বন্ধ করলে সব মুছে যাবে। সাইন ইন করা অবস্থায় খুলুন।</p></div></div>')+
     '<main class="wrap" id="view"></main><nav class="tabs" aria-label="মেনু"><div class="tabs-in wrap" id="tabs"></div></nav>';
@@ -488,7 +510,7 @@ function updApp(){
 }
 
 /* ---------- shared row helpers ---------- */
-function visible(){var me=S.me;return S.entries.filter(function(e){return me.role==='owner'||e.by===me.id})}
+function visible(){var me=S.me;return S.entries.filter(function(e){return isMn()||e.by===me.id})}
 function byNew(a,b){return (b.date>a.date?1:b.date<a.date?-1:0)||((b.ts||0)-(a.ts||0))}
 function payChip(e){
   if(e.pay==='due'){if(e.paid)return '<span class="chip paid">বাকি · পরিশোধ</span>';if(+e.paidAmt>0)return '<span class="chip due">বাকি '+money(remain(e))+' · জমা '+money(e.paidAmt)+'</span>';return '<span class="chip due">বাকি</span>';}
@@ -649,7 +671,7 @@ function fillSelect(el,html){
 }
 /* bought / not bought label for a product */
 function buyStatus(p){
-  var k=String(p.name).trim().toLowerCase(),t=todayISO(),last='',openL=false,owner=S.me.role==='owner';
+  var k=String(p.name).trim().toLowerCase(),t=todayISO(),last='',openL=false,owner=isMn();
   if(owner)S.entries.forEach(function(e){if(String(e.item).trim().toLowerCase()===k&&e.date>last)last=e.date});
   S.lists.forEach(function(l){(l.items||[]).forEach(function(i){
     if(String(i.name).trim().toLowerCase()!==k)return;
@@ -743,7 +765,7 @@ function updEntry(){
   fillSelect($('#e_prod'),prodOpts());
   var cs=$('#e_shop').value;
   fillSelect($('#e_shop'),shopOpts(cs));
-  var owner=S.me.role==='owner',date=$('#e_date').value||todayISO();
+  var owner=isMn(),date=$('#e_date').value||todayISO();
   var list=visible().filter(function(e){return e.date===date}).sort(byNew);
   $('#dayTitle').textContent=date===todayISO()?'আজকের এন্ট্রি':dayLabel(date);
   $('#daySum').textContent=owner?money(sum(list,function(e){return e.amount}))+' · '+list.length+'টি':list.length+'টি';
@@ -852,11 +874,148 @@ function updKharch(){
   $('#x_names').innerHTML=names.map(function(n){return '<option value="'+esc(n)+'"></option>'}).join('');
   if(!list.length){$('#xList').innerHTML='<p class="empty">এই মাসে কোনো খরচ লেখা হয়নি। উপরের ফর্মে প্রথমটা লিখুন।</p>';return}
   $('#xList').innerHTML='<ul class="rows">'+list.map(function(x){
-    var sub=dayLabel(x.date)+(x.edited?' · বদলানো':'');
+    var sub=dayLabel(x.date)+(x.edited?' · বদলানো':'')+(x.payId?' · বেতন ট্যাব থেকে':'');
     return '<li class="row" style="flex-wrap:wrap"><div class="r-main"><span class="r-item">'+esc(x.cat)+(x.title?' · '+esc(x.title):'')+'</span><span class="r-sub">'+sub+'</span></div>'+
-      '<div class="r-end"><span class="amt">'+money(x.amount)+'</span><div class="r-act"><button class="mini" type="button" data-xedit="'+esc(x.id)+'">বদলান</button></div></div>'+
+      '<div class="r-end"><span class="amt">'+money(x.amount)+'</span><div class="r-act">'+(S.me.role==='owner'&&!x.payId?'<button class="mini" type="button" data-xedit="'+esc(x.id)+'">বদলান</button>':'')+'</div></div>'+
       '<form class="xform" data-xform="'+esc(x.id)+'" hidden autocomplete="off"><input class="xf_date" type="date" value="'+esc(x.date)+'" aria-label="তারিখ"><select class="xf_cat" aria-label="কিসের খরচ">'+xCatOpts(x.cat)+'</select><input class="xf_title" value="'+esc(x.title||'')+'" placeholder="নাম বা বিবরণ" aria-label="নাম বা বিবরণ"><input class="xf_amt" type="number" inputmode="decimal" step="any" min="0" value="'+esc(x.amount)+'" aria-label="টাকা"><button class="mini" type="submit">সেভ করুন</button></form></li>';
   }).join('')+'</ul>';
+}
+
+/* ---------- tab: payroll (owner, cashier) — staff salary ledger ---------- */
+var PK={salary:'বেতন দিলাম',advance:'অগ্রিম দিলাম',bonus:'বোনাস/ওভারটাইম',deduct:'কাটা (অনুপস্থিত ইত্যাদি)'};
+var PKS={salary:'বেতন',advance:'অগ্রিম',bonus:'বোনাস',deduct:'কাটা'};
+function mLabel(m){var p=String(m).split('-');return BN_M[(+p[1])-1]+' '+p[0]}
+function staffSalary(st,m){
+  var h=(st.hist&&st.hist.length?st.hist:[{from:'0000-00',amount:+st.salary||0}]).slice().sort(function(a,b){return a.from<b.from?-1:a.from>b.from?1:0});
+  var a=0;h.forEach(function(x){if(x.from<=m)a=+x.amount||0});return a;
+}
+function staffActive(st,m){
+  if(st.joined&&String(st.joined).slice(0,7)>m)return false;
+  if(st.off&&st.offMonth&&m>st.offMonth)return false;
+  if(st.off&&!st.offMonth)return false;
+  return true;
+}
+function payCalc(st,m){
+  var rows=S.pay.filter(function(x){return x.staffId===st.id&&x.month===m&&!x.void});
+  var k=function(n){return sum(rows.filter(function(x){return x.kind===n}),function(x){return x.amount})};
+  var base=staffSalary(st,m),ded=k('deduct'),adv=k('advance'),paid=k('salary'),bonus=k('bonus');
+  return {base:base,ded:ded,adv:adv,paid:paid,bonus:bonus,due:r2(base-ded-adv-paid),rows:rows};
+}
+function mountPayroll(v){
+  if(!S.pm)S.pm=todayISO().slice(0,7);
+  var owner=S.me.role==='owner';
+  v.innerHTML='<section class="card"><div class="sec-h"><h2>মাসের বেতন</h2><input id="py_m" type="month" aria-label="মাস" style="width:auto;max-width:170px;min-height:40px"></div><div class="stats" id="pyStats"></div></section>'+
+  '<div id="pyList" style="display:flex;flex-direction:column;gap:12px"></div>'+
+  '<section class="card"><h2>নতুন কর্মচারী</h2><form id="stf" autocomplete="off">'+
+  '<div class="f"><label for="st_name">নাম</label><input id="st_name" placeholder="যেমন: রহিম" required></div>'+
+  '<div class="f"><label for="st_post">কাজ / পদ (না লিখলেও চলবে)</label><input id="st_post" placeholder="যেমন: শেফ, হেলপার"></div>'+
+  '<div class="f"><label for="st_sal">মাসে বেতন (৳)</label><input id="st_sal" type="number" inputmode="decimal" step="any" min="0" required></div>'+
+  '<div class="f"><label for="st_join">কাজে যোগ দিয়েছেন</label><input id="st_join" type="date" required></div>'+
+  '<button class="btn" id="st_save" type="submit">কর্মচারী যোগ করুন</button></form></section>';
+  $('#py_m').value=S.pm;$('#st_join').value=todayISO();
+  $('#py_m').addEventListener('input',function(){if(this.value){S.pm=this.value;S.payOpen=null;updPayroll()}});
+  $('#stf').addEventListener('submit',async function(ev){
+    ev.preventDefault();
+    var nm=$('#st_name').value.trim(),sal=parseFloat($('#st_sal').value),jn=$('#st_join').value;
+    if(!nm||!(sal>=0)||!jn){toast('নাম, বেতন আর তারিখ ঠিকভাবে দিন',true);return}
+    if(S.staff.some(function(x){return String(x.name).trim().toLowerCase()===nm.toLowerCase()})){toast('এই নামে কর্মচারী আগেই আছে',true);return}
+    try{await put('staff',Date.now().toString(36)+rnd().slice(0,4),{name:nm,post:$('#st_post').value.trim(),salary:sal,hist:[{from:'0000-00',amount:sal}],joined:jn,off:false,by:S.me.id,byName:S.me.name,ts:Date.now()});
+      $('#st_name').value='';$('#st_post').value='';$('#st_sal').value='';toast('কর্মচারী যোগ হয়েছে')}
+    catch(e){toast(errMsg(e),true)}
+  });
+  var L=$('#pyList');
+  L.addEventListener('click',async function(ev){
+    var b=ev.target.closest('[data-pyopen],[data-pyhist],[data-pyvoid],[data-pyedit],[data-pyoff]');if(!b)return;
+    try{
+      if(b.dataset.pyopen){S.payOpen=S.payOpen===b.dataset.pyopen?null:b.dataset.pyopen;S.payEdit=null;updPayroll()}
+      else if(b.dataset.pyhist){S.payHist=S.payHist===b.dataset.pyhist?null:b.dataset.pyhist;updPayroll()}
+      else if(b.dataset.pyedit){S.payEdit=S.payEdit===b.dataset.pyedit?null:b.dataset.pyedit;S.payOpen=null;updPayroll()}
+      else if(b.dataset.pyoff){
+        var st=S.staff.filter(function(x){return x.id===b.dataset.pyoff})[0];if(!st)return;
+        if(!st.off){if(!arm(b,'নিশ্চিত?'))return;await patch('staff',st.id,{off:true,offMonth:S.pm});toast('বন্ধ করা হয়েছে। '+mLabel(S.pm)+' পর্যন্ত বেতন দেখাবে')}
+        else{await patch('staff',st.id,{off:false,offMonth:null});toast('আবার চালু হয়েছে')}
+      }
+      else if(b.dataset.pyvoid){
+        if(!arm(b,'নিশ্চিত?'))return;
+        var rec=S.pay.filter(function(x){return x.id===b.dataset.pyvoid})[0];if(!rec||rec.void)return;
+        var vd={void:true,voidBy:S.me.name,voidOn:Date.now()},ops=[{c:'pay',id:rec.id,u:1,d:vd}];
+        if(rec.kind!=='deduct')ops.push({c:'expenses',id:rec.id,u:1,d:vd});
+        await multi(ops);toast('বাতিল করা হয়েছে (হিসাব থেকে বাদ)');
+      }
+    }catch(e){toast(errMsg(e),true)}
+  });
+  L.addEventListener('change',function(ev){
+    var k=ev.target.closest('.pf_kind');if(!k)return;
+    var f=k.closest('.pyform'),st=S.staff.filter(function(x){return x.id===f.dataset.pyform})[0];
+    if(st&&k.value==='salary'){var c=payCalc(st,S.pm);f.querySelector('.pf_amt').value=c.due>0?c.due:''}
+  });
+  L.addEventListener('submit',async function(ev){
+    ev.preventDefault();
+    var pf=ev.target.closest('[data-pyform]'),ef=ev.target.closest('[data-pyeditform]');
+    try{
+      if(pf){
+        var st=S.staff.filter(function(x){return x.id===pf.dataset.pyform})[0];if(!st)return;
+        var kind=pf.querySelector('.pf_kind').value,amt=parseFloat(pf.querySelector('.pf_amt').value),date=pf.querySelector('.pf_date').value,note=pf.querySelector('.pf_note').value.trim();
+        if(!(amt>0)||!date){toast('টাকা আর তারিখ ঠিকভাবে দিন',true);return}
+        var c=payCalc(st,S.pm);
+        if(kind==='salary'&&amt>c.due+0.001){toast('বাকি বেতনের চেয়ে বেশি দেওয়া যাবে না। বাকি '+money(Math.max(0,c.due)),true);return}
+        var id=Date.now().toString(36)+rnd().slice(0,4),now=Date.now();
+        var rec={staffId:st.id,staffName:st.name,month:S.pm,kind:kind,amount:amt,date:date,note:note,by:S.me.id,byName:S.me.name,ts:now};
+        var ops=[{c:'pay',id:id,d:rec}];
+        if(kind!=='deduct')ops.push({c:'expenses',id:id,d:{date:date,cat:'বেতন',title:st.name+' · '+PKS[kind],amount:amt,payId:id,staffId:st.id,month:S.pm,by:S.me.id,byName:S.me.name,ts:now}});
+        await multi(ops);
+        S.payOpen=null;S.payDraft=null;toast('সেভ হয়েছে');
+      }else if(ef){
+        var s2=S.staff.filter(function(x){return x.id===ef.dataset.pyeditform})[0];if(!s2)return;
+        var nm=ef.querySelector('.se_name').value.trim(),sal=parseFloat(ef.querySelector('.se_sal').value),from=ef.querySelector('.se_from').value;
+        if(!nm||!(sal>=0)||!from){toast('নাম, বেতন আর কোন মাস থেকে তা দিন',true);return}
+        var upd={name:nm,post:ef.querySelector('.se_post').value.trim()};
+        if(sal!==staffSalary(s2,from)){
+          var h=(s2.hist&&s2.hist.length?s2.hist:[{from:'0000-00',amount:+s2.salary||0}]).filter(function(x){return x.from!==from});
+          h.push({from:from,amount:sal});upd.hist=h;upd.salary=sal;
+        }
+        await patch('staff',s2.id,upd);S.payEdit=null;toast('বদলানো হয়েছে');
+      }
+    }catch(e){toast(errMsg(e),true)}
+  });
+}
+function updPayroll(){
+  var L=$('#pyList');if(!L)return;
+  var m=S.pm,owner=S.me.role==='owner';
+  // keep what is being typed
+  var of=L.querySelector('.pyform');
+  if(of&&S.payOpen===of.dataset.pyform)S.payDraft={id:of.dataset.pyform,kind:of.querySelector('.pf_kind').value,amt:of.querySelector('.pf_amt').value,date:of.querySelector('.pf_date').value,note:of.querySelector('.pf_note').value};
+  var list=S.staff.filter(function(st){return staffActive(st,m)}).sort(function(a,b){return String(a.name).localeCompare(String(b.name),'bn')});
+  var tb=0,tp=0,td=0,tbo=0;
+  var cards=list.map(function(st){
+    var c=payCalc(st,m);tb+=c.base;tp+=c.paid+c.adv;td+=Math.max(0,c.due);tbo+=c.bonus;
+    var open=S.payOpen===st.id,hist=S.payHist===st.id,edit=S.payEdit===st.id;
+    var dr=S.payDraft&&S.payDraft.id===st.id?S.payDraft:null;
+    var chip=c.due<=0?'<span class="chip paid">পুরো দেওয়া হয়েছে</span>':(c.paid+c.adv>0?'<span class="chip due">বাকি '+money(c.due)+'</span>':'<span class="chip due">দেওয়া হয়নি</span>');
+    var calc='<div class="pycalc"><span>মাসের বেতন</span><span>'+money(c.base)+'</span>'+
+      (c.ded?'<span>− কাটা</span><span>'+money(c.ded)+'</span>':'')+
+      (c.adv?'<span>− অগ্রিম নেওয়া</span><span>'+money(c.adv)+'</span>':'')+
+      (c.paid?'<span>− বেতন দেওয়া হয়েছে</span><span>'+money(c.paid)+'</span>':'')+
+      '<span class="tot">'+(c.due<0?'বেশি দেওয়া হয়েছে':'বাকি')+'</span><span class="tot">'+money(Math.abs(c.due))+'</span>'+
+      (c.bonus?'<span>এছাড়া বোনাস/ওভারটাইম</span><span>'+money(c.bonus)+'</span>':'')+'</div>';
+    var kindOpts=Object.keys(PK).map(function(k){return '<option value="'+k+'"'+((dr?dr.kind:'salary')===k?' selected':'')+'>'+PK[k]+'</option>'}).join('');
+    var form=open?'<form class="pyform" data-pyform="'+esc(st.id)+'" autocomplete="off"><select class="pf_kind" aria-label="কী ধরনের">'+kindOpts+'</select>'+
+      '<input class="pf_amt" type="number" inputmode="decimal" step="any" min="0" placeholder="টাকা ৳" value="'+esc(dr?dr.amt:(c.due>0?c.due:''))+'" aria-label="টাকা"><input class="pf_date" type="date" value="'+esc(dr?dr.date:todayISO())+'" aria-label="তারিখ">'+
+      '<input class="pf_note" placeholder="নোট (না লিখলেও চলবে)" value="'+esc(dr?dr.note:'')+'" aria-label="নোট"><button class="mini" type="submit">সেভ করুন</button></form>':'';
+    var eform=(edit&&owner)?'<form class="pyform" data-pyeditform="'+esc(st.id)+'" autocomplete="off"><input class="se_name pf_note" value="'+esc(st.name)+'" aria-label="নাম"><input class="se_post pf_note" value="'+esc(st.post||'')+'" placeholder="পদ" aria-label="পদ">'+
+      '<input class="se_sal" type="number" inputmode="decimal" step="any" min="0" value="'+esc(staffSalary(st,m))+'" aria-label="নতুন মাসিক বেতন"><input class="se_from" type="month" value="'+esc(m)+'" aria-label="কোন মাস থেকে"><span class="r-sub" style="grid-column:1/-1">বেতন বাড়ালে বা কমালে "কোন মাস থেকে" দিন। আগের মাসের হিসাব বদলাবে না।</span><button class="mini" type="submit">সেভ করুন</button></form>':'';
+    var h=hist?'<div class="pyhist">'+(S.pay.filter(function(x){return x.staffId===st.id&&x.month===m}).sort(function(a,b){return (b.ts||0)-(a.ts||0)}).map(function(x){
+      return '<div class="'+(x.void?'void':'')+'"><span>'+dayLabel(x.date)+' · '+PKS[x.kind]+(x.note?' · '+esc(x.note):'')+' · '+esc(x.byName||'')+(x.void?' · বাতিল':'')+'</span><span>'+money(x.amount)+(owner&&!x.void?' <button class="mini" type="button" data-pyvoid="'+esc(x.id)+'">বাতিল</button>':'')+'</span></div>'}).join('')||'<div><span>এই মাসে কিছু লেখা হয়নি</span></div>')+'</div>':'';
+    var sub=[st.post?esc(st.post):'',st.off?'বন্ধ':''].filter(Boolean).join(' · ');
+    return '<section class="card"><div class="sec-h"><h2>'+esc(st.name)+'</h2>'+chip+'</div>'+(sub?'<p class="r-sub" style="margin:0">'+sub+'</p>':'')+calc+
+      '<div class="r-act" style="margin-top:10px;flex-wrap:wrap"><button class="mini" type="button" data-pyopen="'+esc(st.id)+'">'+(open?'বন্ধ করুন':'টাকা লিখুন')+'</button><button class="mini" type="button" data-pyhist="'+esc(st.id)+'">'+(hist?'হিসাব লুকান':'হিসাব দেখুন')+'</button>'+
+      (owner?'<button class="mini" type="button" data-pyedit="'+esc(st.id)+'">বদলান</button><button class="mini" type="button" data-pyoff="'+esc(st.id)+'">'+(st.off?'চালু করুন':'ছেড়ে গেছে')+'</button>':'')+'</div>'+form+eform+h+'</section>';
+  });
+  // staff that are inactive this month but closed: allow reopening
+  var closed=S.staff.filter(function(st){return !staffActive(st,m)&&st.off}).sort(function(a,b){return String(a.name).localeCompare(String(b.name),'bn')});
+  var cl=(owner&&closed.length)?'<section class="card"><h2>ছেড়ে যাওয়া</h2><ul class="rows">'+closed.map(function(st){return '<li class="row"><div class="r-main"><span class="r-item">'+esc(st.name)+'</span><span class="r-sub">'+esc(st.post||'')+(st.offMonth?' · '+mLabel(st.offMonth)+' পর্যন্ত':'')+'</span></div><div class="r-act"><button class="mini" type="button" data-pyoff="'+esc(st.id)+'">চালু করুন</button></div></li>'}).join('')+'</ul></section>':'';
+  $('#pyStats').innerHTML='<div class="stat hl"><small>মোট বেতন</small><b>'+money(tb)+'</b></div><div class="stat"><small>দেওয়া হয়েছে</small><b>'+money(tp)+'</b></div><div class="stat"><small>বাকি</small><b>'+money(td)+'</b></div><div class="stat"><small>বোনাস/ওভারটাইম</small><b>'+money(tbo)+'</b></div>';
+  L.innerHTML=(cards.join('')||'<section class="card"><p class="empty">'+(S.staff.length?'এই মাসে কোনো কর্মচারী নেই।':'এখনো কোনো কর্মচারী নেই। নিচের ফর্মে প্রথম কর্মচারী যোগ করুন।')+'</p></section>')+cl;
 }
 
 /* ---------- tab: bikri (owner, cashier) — sales ---------- */
@@ -906,7 +1065,7 @@ function updBikri(){
       html+='<div class="grp"><span>'+dayLabel(d)+'</span><span>'+money(sum(day,function(y){return y.amount}))+'</span></div><ul class="rows">';
     }
     html+='<li class="row" style="flex-wrap:wrap"><div class="r-main"><span class="r-item">'+esc(VMODES[x.mode]||x.mode)+(x.note?' · '+esc(x.note):'')+'</span><span class="r-sub">'+esc(x.byName||'')+(x.edited?' · বদলানো':'')+'</span></div>'+
-      '<div class="r-end"><span class="amt">'+money(x.amount)+'</span><div class="r-act"><button class="mini" type="button" data-vedit="'+esc(x.id)+'">বদলান</button></div></div>'+
+      '<div class="r-end"><span class="amt">'+money(x.amount)+'</span><div class="r-act">'+(S.me.role==='owner'?'<button class="mini" type="button" data-vedit="'+esc(x.id)+'">বদলান</button>':'')+'</div></div>'+
       '<form class="vform" data-vform="'+esc(x.id)+'" hidden autocomplete="off"><input class="vf_date" type="date" value="'+esc(x.date)+'" aria-label="তারিখ"><select class="vf_mode" aria-label="কীভাবে">'+vModeOpts(x.mode)+'</select><input class="vf_amt" type="number" inputmode="decimal" step="any" min="0" value="'+esc(x.amount)+'" aria-label="টাকা"><input class="vf_note" value="'+esc(x.note||'')+'" placeholder="নোট" aria-label="নোট"><button class="mini" type="submit">সেভ করুন</button></form></li>';
   });
   $('#vList').innerHTML=html+'</ul>';
@@ -929,7 +1088,7 @@ function mountBook(v){
 }
 function updBook(){
   if(!$('#bList'))return;
-  var owner=S.me.role==='owner',f=S.f,q=f.q.trim().toLowerCase();
+  var owner=isMn(),f=S.f,q=f.q.trim().toLowerCase();
   var list=visible().filter(function(e){
     if(f.from&&e.date<f.from)return false;if(f.to&&e.date>f.to)return false;
     if(f.pay&&e.pay!==f.pay)return false;if(f.by&&(e.chef||e.by)!==f.by)return false;
@@ -1012,7 +1171,7 @@ async function setItemState(lid,iid,st,extra){
   });
   await patch('lists',lid,{items:items});
 }
-function listCardHTML(l,owner){
+function listCardHTML(l,owner,ro){
   var items=l.items||[],done=items.filter(function(i){return i.st!=='open'}).length;
   var head='<div class="sec-h"><h2>'+dayLabel(l.date)+'</h2><span class="sum">'+done+'/'+items.length+' শেষ</span></div>'+(owner?'<p class="mute" style="font-size:14px">'+esc(l.byName||l.by)+' পাঠিয়েছেন</p>':'');
   var rows=items.map(function(i){
@@ -1020,7 +1179,7 @@ function listCardHTML(l,owner){
     var acts='';
     if(owner){
       if(i.st==='open')acts='<button class="mini" type="button" data-pick="'+l.id+'|'+i.id+'">দাম লিখুন</button><button class="mini" type="button" data-skip="'+l.id+'|'+i.id+'">কেনা হয়নি</button>';
-      else if(i.st==='skip')acts='<button class="mini" type="button" data-reopen="'+l.id+'|'+i.id+'">আবার খুলুন</button>';
+      else if(i.st==='skip'&&!ro)acts='<button class="mini" type="button" data-reopen="'+l.id+'|'+i.id+'">আবার খুলুন</button>';
     }
     var amt=(owner&&i.st==='done'&&i.amt!=null)?'<span class="amt">'+money(i.amt)+'</span>':'';
     return '<li class="row"><div class="r-main"><span class="r-item">'+esc(i.name)+'</span><span class="r-sub">'+sub+'</span><span>'+listState(i)+'</span></div><div class="r-end">'+amt+'<div class="r-act">'+acts+'</div></div></li>';
@@ -1204,7 +1363,7 @@ function updLists(){
   }
   var ls=S.lists.slice().sort(function(a,b){return (openList(b)?1:0)-(openList(a)?1:0)||byListNew(a,b)});
   if(!ls.length){el.innerHTML='<section class="card"><h2>শেফের লিস্ট</h2><p class="empty">শেফ লিস্ট পাঠালে এখানে দেখা যাবে। প্রতিটা জিনিসে "দাম লিখুন" চাপলে এন্ট্রি হয়ে যাবে। আগে "সেটআপ" ট্যাব থেকে দোকান, প্রোডাক্ট আর শেফের আইডি বানান।</p></section>';return}
-  el.innerHTML=ls.slice(0,40).map(function(l){return listCardHTML(l,true)}).join('');
+  el.innerHTML=ls.slice(0,40).map(function(l){return listCardHTML(l,true,S.me.role!=='owner')}).join('');
 }
 
 /* ---------- tab: report (owner) ---------- */
@@ -1412,6 +1571,7 @@ function updTeam(){
 function mountSetupTab(v){
   if(!S.sp)S.sp='products';
   v.innerHTML='<div class="seg3" role="group" aria-label="সেটআপ"><button type="button" data-sp="shops">দোকান</button><button type="button" data-sp="products">প্রোডাক্ট</button><button type="button" data-sp="team">টিম</button></div><div id="spBody" class="spbody"></div>';
+  if(S.me.role!=='owner'){var tb=v.querySelector('[data-sp="team"]');if(tb)tb.remove();if(S.sp==='team')S.sp='products'}
   $$('.seg3 button').forEach(function(b){b.addEventListener('click',function(){S.sp=this.dataset.sp;showPanel()})});
   showPanel();
 }
@@ -1442,7 +1602,7 @@ function updShops(){
   var shops=S.shops.slice().sort(function(a,b){return String(a.name).localeCompare(String(b.name),'bn')});
   $('#shCount').textContent=shops.length+'টি';
   l.innerHTML=shops.length?'<ul class="rows">'+shops.map(function(s){
-    return '<li class="row"><div class="r-main"><span class="r-item">'+esc(s.name)+(s.off?' · বন্ধ':'')+'</span></div><div class="r-act"><button class="mini" type="button" data-shoff="'+esc(s.id)+'">'+(s.off?'চালু করুন':'বন্ধ করুন')+'</button></div></li>';
+    return '<li class="row"><div class="r-main"><span class="r-item">'+esc(s.name)+(s.off?' · বন্ধ':'')+'</span></div>'+(S.me.role==='owner'?'<div class="r-act"><button class="mini" type="button" data-shoff="'+esc(s.id)+'">'+(s.off?'চালু করুন':'বন্ধ করুন')+'</button></div>':'')+'</li>';
   }).join('')+'</ul>':'<p class="empty">এখনো কোনো দোকান নেই। উপরে প্রথম দোকানের নাম লিখে যোগ করুন।</p>';
 }
 
@@ -1484,8 +1644,8 @@ function updProducts(){
       var uo=UNITS.map(function(u){return '<option'+(u===p.unit?' selected':'')+'>'+u+'</option>'}).join('');
       var bs=buyStatus(p);
       return '<li class="row" style="flex-wrap:wrap"><div class="r-main"><span class="r-item">'+esc(p.name)+(p.off?' · বন্ধ':'')+'</span><span class="r-sub">'+(+p.price>0?money(p.price)+' / '+esc(p.unit):'দাম লেখা নেই · '+esc(p.unit))+(p.shop?' · '+esc(p.shop):'')+(bs.sub?' · '+bs.sub:'')+'</span><span>'+bs.chip+'</span></div>'+
-        '<div class="r-act"><button class="mini" type="button" data-pdtoggle="'+esc(p.id)+'">বদলান</button><button class="mini" type="button" data-poff="'+esc(p.id)+'">'+(p.off?'চালু করুন':'বন্ধ করুন')+'</button></div>'+
-        '<form class="pform" data-pform="'+esc(p.id)+'" hidden><input class="pf_price" type="number" inputmode="decimal" step="any" min="0" value="'+(+p.price||'')+'" aria-label="দাম"><select class="pf_unit" aria-label="একক">'+uo+'</select><select class="pf_shop" aria-label="দোকান">'+so+'</select><button class="mini" type="submit">সেভ করুন</button></form></li>';
+        (S.me.role==='owner'?'<div class="r-act"><button class="mini" type="button" data-pdtoggle="'+esc(p.id)+'">বদলান</button><button class="mini" type="button" data-poff="'+esc(p.id)+'">'+(p.off?'চালু করুন':'বন্ধ করুন')+'</button></div>':'')+
+        (S.me.role==='owner'?'<form class="pform" data-pform="'+esc(p.id)+'" hidden><input class="pf_price" type="number" inputmode="decimal" step="any" min="0" value="'+(+p.price||'')+'" aria-label="দাম"><select class="pf_unit" aria-label="একক">'+uo+'</select><select class="pf_shop" aria-label="দোকান">'+so+'</select><button class="mini" type="submit">সেভ করুন</button></form>':'')+'</li>';
     }).join('')+'</ul>';
   });
   l.innerHTML=html;
